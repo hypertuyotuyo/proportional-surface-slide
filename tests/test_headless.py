@@ -381,6 +381,98 @@ check(r == {'FINISHED'} and keys is not None and obj.active_shape_key.name == "t
       f"新しいキー：Basis と test_key ができて書き込み先になった（{[k.name for k in keys.key_blocks] if keys else None}）")
 bpy.ops.object.mode_set(mode='OBJECT')
 
+# ======================================================== 9b. 回転
+import math  # noqa: E402
+
+obj = sphere_with_keys(segments=64, rings=32)
+basis = [v.co.copy() for v in obj.data.vertices]
+sel = edit_select(obj, lambda v: v.co.y < -0.9 and abs(v.co.z) < 0.12 and abs(v.co.x) < 0.35)
+r = OP(mode='ROTATE', angle=math.radians(90), radius=0.01, **FRONT)
+check(r == {'FINISHED'} and len(sel) >= 6, f"回転：球で実行できた（{r}・{len(sel)} 頂点）")
+co = edit_coords(obj)
+bpy.ops.object.mode_set(mode='OBJECT')
+off = max_off_surface(surface_tree(basis, obj.data), co)
+check(off < 1e-4, f"回転：面の上に乗ったまま（最大のずれ {off:.1e}）")
+c0 = sum((basis[i] for i in sel), Vector()) / len(sel)
+das, ratios = [], []
+for i in sel:
+    a, b = basis[i] - c0, co[i] - c0
+    if math.hypot(a.x, a.z) < 0.1:
+        continue
+    da = math.degrees(math.atan2(b.z, b.x) - math.atan2(a.z, a.x))
+    das.append((da + 180) % 360 - 180)
+    ratios.append(math.hypot(b.x, b.z) / math.hypot(a.x, a.z))
+mean_da = sum(das) / len(das)
+check(abs(mean_da - 90) < 5, f"回転：正面から見て左回りに 90°（平均 {mean_da:.1f}°・{len(das)} 頂点）")
+check(min(ratios) > 0.9 and max(ratios) < 1.1, f"回転：中心からの距離はほぼそのまま（{min(ratios):.3f}〜{max(ratios):.3f}）")
+
+
+def flat_grid(n=20):
+    fresh()
+    bpy.ops.mesh.primitive_grid_add(x_subdivisions=n, y_subdivisions=n, size=2.0, rotation=(1.5707963, 0, 0))
+    o = bpy.context.object
+    bpy.ops.object.transform_apply(rotation=True)
+    bpy.ops.object.mode_set(mode='EDIT')
+    bm = bmesh.from_edit_mesh(o.data)
+    for f in bm.faces:
+        if f.normal.y > 0:
+            f.normal_flip()
+    bmesh.update_edit_mesh(o.data)
+    bpy.ops.object.mode_set(mode='OBJECT')
+    return o
+
+
+obj = flat_grid()
+sel = edit_select(obj, lambda v: abs(v.co.x) < 0.25 and abs(v.co.z) < 0.25)
+start = edit_coords(obj)
+OP(mode='ROTATE', angle=math.radians(120), radius=0.6, falloff='SMOOTH', **FRONT)
+co = edit_coords(obj)
+c0 = sum((start[i] for i in sel), Vector()) / len(sel)
+moved = [i for i in range(len(start)) if (co[i] - start[i]).length > 1e-7]
+dr = max(abs((co[i] - c0).length - (start[i] - c0).length) for i in moved)
+dy = max(abs(co[i].y) for i in moved)
+check(len(moved) > len(sel) and dr < 2e-3,
+      f"回転 120°：まわりの頂点も弧の上を回り、中心へ縮まない（距離の差 最大 {dr:.1e}・{len(moved)} 頂点）")
+check(dy < 1e-6, f"回転：平らな面から浮かない（{dy:.1e}）")
+ang = []
+for i in sel:
+    a, b = start[i] - c0, co[i] - c0
+    if a.length > 0.05:
+        ang.append(((math.degrees(math.atan2(b.z, b.x) - math.atan2(a.z, a.x))) + 180) % 360 - 180)
+check(all(abs(x - 120) < 0.5 for x in ang), f"回転：選んだ頂点はちょうど 120°（{min(ang):.2f}〜{max(ang):.2f}）")
+snap_on = co
+set_edit_coords(obj, start)
+OP(mode='ROTATE', angle=math.radians(120), radius=0.6, falloff='SMOOTH', snap=False, **FRONT)
+co = edit_coords(obj)
+d = max((a - b).length for a, b in zip(co, snap_on))
+check(d < 2e-3, f"回転：平らな面なら、面に沿わせても沿わせなくても同じ（差 {d:.1e}）")
+set_edit_coords(obj, start)
+OP(mode='ROTATE', angle=math.radians(120), radius=0.6, falloff='SMOOTH', **FRONT)
+d = max((a - b).length for a, b in zip(edit_coords(obj), snap_on))
+check(d < 1e-9, f"回転：同じ値で 2 回目も同じ形（F9 と同じ道すじ・差 {d:.1e}）")
+
+# 左右対称：片側の眉を選んで回すと、反対側は逆向きに回る。両側を選んでも同じ
+set_edit_coords(obj, start)
+bpy.ops.object.mode_set(mode='OBJECT')
+brow = edit_select(obj, lambda v: 0.35 < v.co.x < 0.75 and abs(v.co.z - 0.5) < 0.06)
+OP(mode='ROTATE', angle=math.radians(20), radius=0.3, use_mirror=True, **FRONT)
+co = edit_coords(obj)
+mi = mirror_index(start)
+asym = max((Vector((-(co[i] - start[i]).x, (co[i] - start[i]).y, (co[i] - start[i]).z)) - (co[mi[i]] - start[mi[i]])).length
+           for i in range(len(start)))
+c_src = sum((start[i] for i in brow), Vector()) / len(brow)
+c_after = sum((co[i] for i in brow), Vector()) / len(brow)
+check(asym < 1e-6, f"回転＋左右対称：反対側は鏡に写した動き＝逆向きの回転（最大差 {asym:.1e}）")
+check((c_after - c_src).length < 1e-6, f"回転＋左右対称：中心は選んだ側の眉の真ん中（ずれ {(c_after - c_src).length:.1e}）")
+one_side = co
+set_edit_coords(obj, start)
+bpy.ops.object.mode_set(mode='OBJECT')
+edit_select(obj, lambda v: 0.35 < abs(v.co.x) < 0.75 and abs(v.co.z - 0.5) < 0.06)
+OP(mode='ROTATE', angle=math.radians(20), radius=0.3, use_mirror=True, **FRONT)
+d = max((a - b).length for a, b in zip(edit_coords(obj), one_side))
+check(d < 1e-6, f"回転＋左右対称：両側の眉を選んでも、片側を選んだときと同じ（差 {d:.1e}）")
+bpy.ops.object.mode_set(mode='OBJECT')
+
 # ======================================================== 10. 文言
 scene = bpy.context.scene
 scene.unit_settings.system = 'METRIC'
@@ -392,7 +484,7 @@ def fake(**kw):
     base = dict(mode='MOVE', num_text="", num_error=False, scale=1.0, offset_length=0.0123, axis='NONE',
                 axis_space='GLOBAL', axis_plane=False, radius=0.02, falloff='SMOOTH', connected=True,
                 affected=10, visible=100, use_mirror=False, open_info=None, upper_ratio=0.25, snap=True,
-                reference='START', mirror_missing=0, hint="")
+                reference='START', mirror_missing=0, hint="", angle=0.0, rot_view=False)
     base.update(kw)
     return types.SimpleNamespace(**base)
 

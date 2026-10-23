@@ -1,7 +1,7 @@
 schema_version = "1.0.0"
 
 id = "proportional_surface_slide"
-version = "2.0.0"
+version = "2.1.0"
 name = "面に沿ってスライド（プロポーショナル）"
 tagline = "選んだ頂点を面に沿ってすべらせ、まわりも減衰でついてくる"
 maintainer = "hyper-tuyotuyo"

@@ -30,6 +30,7 @@ OP_IDNAME = "mesh.surface_slide_proportional"
 MODE_ITEMS = [
     ('MOVE', "移動", "マウスの動きのぶん、面に沿って動かす", 'ORIENTATION_VIEW', 0),
     ('SCALE', "拡大縮小", "選択の中心から広げる・縮める", 'FULLSCREEN_ENTER', 1),
+    ('ROTATE', "回転", "選択の中心のまわりに、面に沿って回す（眉・まぶた・口角の傾き）", 'CON_ROTLIKE', 3),
     ('OPEN', "口を開く", "唇の切れ目を上下に分け、下唇はマウスについて、上唇は少し反対へ動かす", 'MESH_UVSPHERE', 2),
 ]
 AXIS_ITEMS = [
@@ -159,8 +160,13 @@ class MESH_OT_surface_slide_proportional(bpy.types.Operator):
     center: FloatVectorProperty(name="拡大の中心", subtype='XYZ', size=3, options={'SKIP_SAVE'},
                                 description="拡大縮小の中心（ワールド座標）。ふつうは選択の中心のまま")
     use_center: BoolProperty(default=False, options={'HIDDEN', 'SKIP_SAVE'})
+    angle: FloatProperty(name="角度", default=0.0, subtype='ANGLE', unit='ROTATION', options={'SKIP_SAVE'},
+                         description="回転の角度。軸が手前を向いているとき、プラスは画面で左回り")
+    rot_view: BoolProperty(name="画面の奥向きで回す", default=False, options={'SKIP_SAVE'},
+                           description="オフ：選んだ所の面の向きを軸に回す（顔から浮かない）。オン：画面の奥向きを軸に回す"
+                                       "（Blender の R と同じ）。操作中はもう一度 R")
     axis: EnumProperty(name="軸", items=AXIS_ITEMS, default='NONE', options={'SKIP_SAVE'},
-                       description="この軸の向きだけに動かす（操作中は X・Y・Z キー）")
+                       description="この軸の向きだけに動かす（操作中は X・Y・Z キー）。回転では、この軸のまわりに回す")
     axis_space: EnumProperty(name="軸の向き", items=SPACE_ITEMS, default='GLOBAL', options={'SKIP_SAVE'},
                              description="軸をワールドで取るか、オブジェクトの向きで取るか")
     axis_plane: BoolProperty(name="その軸を除く", default=False, options={'SKIP_SAVE'},
@@ -209,11 +215,26 @@ class MESH_OT_surface_slide_proportional(bpy.types.Operator):
         ctx.compute_weights(self.radius, self.falloff, self.connected, mirror=self.use_mirror,
                             mode=self.mode, open_round=self.open_round)
 
+    def _rot_axis(self, obj, ctx):
+        """回転の軸（ワールド・単位ベクトル）。X/Y/Z を決めていなければ、面の向きか画面の奥向き（手前向き）。"""
+        av = _axis_vec(self, obj)
+        if av is not None:
+            return av
+        toward = -Vector(self.view_dir) if Vector(self.view_dir).length > 1e-9 else Vector((0.0, -1.0, 0.0))
+        if self.rot_view:
+            return toward.normalized()
+        return ctx.selection_normal_world(ctx.rotation_ids(self.use_mirror), toward=toward)
+
     def _solve(self, obj, bm, ctx, touched):
-        center = Vector(self.center) if self.use_center else ctx.center_world
+        if self.mode == 'ROTATE':
+            center = ctx.rotation_center(self.use_mirror)
+        else:
+            center = Vector(self.center) if self.use_center else ctx.center_world
+        rot_axis = self._rot_axis(obj, ctx) if self.mode == 'ROTATE' else None
         pos = ctx.solve(mode=self.mode, offset=Vector(self.offset), scale=self.scale,
                         axis_vec=_axis_vec(self, obj), plane=self.axis_plane, snap=self.snap,
-                        mirror=self.use_mirror, upper_ratio=self.upper_ratio, center=center)
+                        mirror=self.use_mirror, upper_ratio=self.upper_ratio, center=center,
+                        angle=self.angle, rot_axis=rot_axis)
         core.apply_positions(bm, ctx, pos, touched)
         bmesh.update_edit_mesh(obj.data, loop_triangles=True, destructive=False)
         return set(pos.keys())
@@ -244,12 +265,17 @@ class MESH_OT_surface_slide_proportional(bpy.types.Operator):
             layout.label(text=f"書き込み先：{T.target_label(obj)}", icon='SHAPEKEY_DATA')
         col = layout.column()
         # 「動かし方」の見出しを付けると幅が足りず「拡大…」と切れるので、横いっぱいに並べる
-        row = col.row()
-        row.use_property_split = False
-        row.prop(self, "mode", expand=True)
+        grid = col.grid_flow(row_major=True, columns=2, even_columns=True, align=True)
+        grid.use_property_split = False
+        for m in MODE_ITEMS:
+            grid.prop_enum(self, "mode", m[0])
         if self.mode == 'SCALE':
             col.prop(self, "scale")
             col.prop(self, "center")
+        elif self.mode == 'ROTATE':
+            col.prop(self, "angle")
+            if self.axis == 'NONE':
+                col.prop(self, "rot_view")
         else:
             col.prop(self, "offset")
         if self.mode == 'OPEN':
@@ -258,7 +284,8 @@ class MESH_OT_surface_slide_proportional(bpy.types.Operator):
         col.row().prop(self, "axis", expand=True)
         if self.axis != 'NONE':
             col.row().prop(self, "axis_space", expand=True)
-            col.prop(self, "axis_plane")
+            if self.mode != 'ROTATE':
+                col.prop(self, "axis_plane")
         col.separator()
         col.label(text="範囲")
         col.prop(self, "radius")
@@ -293,6 +320,8 @@ class MESH_OT_surface_slide_proportional(bpy.types.Operator):
         self.mode = 'MOVE'
         self.offset = (0.0, 0.0, 0.0)
         self.scale = 1.0
+        self.angle = 0.0
+        self.rot_view = False
         self.axis = 'NONE'
         self.axis_space = 'GLOBAL'
         self.axis_plane = False
@@ -336,6 +365,9 @@ class MESH_OT_surface_slide_proportional(bpy.types.Operator):
         self.scale_ref = 1.0
         self.scale_d0 = 0.0
         self.scale_near = False
+        self.rot_base = 0.0
+        self.rot_acc = 0.0
+        self.rot_last = 0.0
         self.affected = 0
         self.num_text = ""
         self.num_adv = False
@@ -404,6 +436,8 @@ class MESH_OT_surface_slide_proportional(bpy.types.Operator):
         try:
             if self.mode == 'SCALE':
                 return float(bpy.utils.units.to_value('NONE', 'NONE', text))
+            if self.mode == 'ROTATE':
+                return math.radians(float(bpy.utils.units.to_value('NONE', 'NONE', text)))
             if us.system == 'NONE':
                 return float(bpy.utils.units.to_value('NONE', 'NONE', text))
             return bpy.utils.units.to_value(us.system, 'LENGTH', text) / (us.scale_length or 1.0)
@@ -430,6 +464,10 @@ class MESH_OT_surface_slide_proportional(bpy.types.Operator):
                 if self.mode == 'SCALE':
                     self.scale = val
                     self.offset = (0.0, 0.0, 0.0)
+                elif self.mode == 'ROTATE':
+                    self.angle = val
+                    self.offset = (0.0, 0.0, 0.0)
+                    self.scale = 1.0
                 else:
                     self.offset = self._numeric_offset(val)
                     self.scale = 1.0
@@ -438,12 +476,48 @@ class MESH_OT_surface_slide_proportional(bpy.types.Operator):
             d = (self.virtual - self._center_2d()).length
             self.scale = self.scale_base * (1.0 + (d - self.scale_d0) / max(self.scale_ref, 1.0))
             self.offset = (0.0, 0.0, 0.0)
+        elif self.mode == 'ROTATE':
+            a = self._mouse_angle()
+            da = a - self.rot_last
+            da = (da + math.pi) % math.tau - math.pi
+            self.rot_acc += da
+            self.rot_last = a
+            self.angle = self.rot_base + self.rot_acc * self._rot_sign()
+            self.offset = (0.0, 0.0, 0.0)
+            self.scale = 1.0
         else:
             self.offset = self.offset_base + self._mouse_delta()
             self.scale = 1.0
+        if self.mode != 'ROTATE':
+            self.angle = 0.0
         self.offset_length = Vector(self.offset).length
         self.touched = self._solve(self.obj, self.bm, self.ctx, self.touched)
         self._refresh_ui(context)
+
+    def _mouse_angle(self):
+        v = self.virtual - self._rot_center_2d()
+        return math.atan2(v.y, v.x) if v.length > 1e-6 else self.rot_last
+
+    def _rot_center_2d(self):
+        c = self.ctx.rotation_center(self.use_mirror)
+        c2 = view3d_utils.location_3d_to_region_2d(self.region, self.rv3d, c)
+        if c2 is None:
+            c2 = Vector((self.region.width / 2, self.region.height / 2))
+        return c2
+
+    def _rot_sign(self):
+        """画面で左回りにマウスを回したとき、見た目も左回りになる向き。"""
+        ax = self._rot_axis(self.obj, self.ctx)
+        return 1.0 if ax.dot(-Vector(self.view_dir)) >= 0.0 else -1.0
+
+    def _rot_reset_mouse(self):
+        self.rot_base = self.angle
+        self.rot_acc = 0.0
+        self.rot_last = self._mouse_angle_raw()
+
+    def _mouse_angle_raw(self):
+        v = self.virtual - self._rot_center_2d()
+        return math.atan2(v.y, v.x) if v.length > 1e-6 else 0.0
 
     def _hint_text(self):
         if self.mode == 'OPEN':
@@ -452,6 +526,11 @@ class MESH_OT_surface_slide_proportional(bpy.types.Operator):
             width = (max(xs) - min(xs)) if xs else 0.0
             if width > 0 and self.radius < 0.8 * width:
                 return f"口を開くときは、範囲の半径を口の幅（{T.fmt_len(self.scene, width)}）くらいにすると形がきれいです"
+        if self.mode == 'ROTATE' and self.axis != 'NONE':
+            ax = self._rot_axis(self.obj, self.ctx)
+            nrm = self.ctx.selection_normal_world(self.ctx.rotation_ids(self.use_mirror))
+            if abs(ax.dot(nrm)) < 0.3 and self.snap:
+                return "⚠ この軸は面に寝ているので、面に沿ってはほとんど回りません（C で軸を解除すると面の向きで回します）"
         if self.mode == 'SCALE' and getattr(self, "scale_near", False):
             return "中心の近くから始めたので、離した距離で広がります（近づけると縮む）"
         return ""
@@ -482,9 +561,12 @@ class MESH_OT_surface_slide_proportional(bpy.types.Operator):
         self.scale_base = 1.0
         self.offset = (0.0, 0.0, 0.0)
         self.scale = 1.0
+        self.angle = 0.0
         self.start_mouse = self.virtual.copy()
         if mode == 'SCALE':
             self._scale_reference()
+        if mode == 'ROTATE':
+            self._rot_reset_mouse()
         if prev == 'OPEN' or mode == 'OPEN':
             self._rebuild_weights()
         if mode == 'OPEN':
@@ -507,7 +589,7 @@ class MESH_OT_surface_slide_proportional(bpy.types.Operator):
             return
         if self.mode == 'SCALE':
             self.scale_base = self.scale
-        else:
+        elif self.mode != 'ROTATE':
             self.offset_base = Vector(self.offset)
         self.nav_pending = True
 
@@ -587,6 +669,8 @@ class MESH_OT_surface_slide_proportional(bpy.types.Operator):
                 self.start_mouse = cur.copy()
                 if self.mode == 'SCALE':
                     self._scale_reference()
+                if self.mode == 'ROTATE':
+                    self._rot_reset_mouse()
                 return {'RUNNING_MODAL'}
             k = 0.1 if event.shift else 1.0
             self.virtual += (cur - self.last_mouse) * k
@@ -642,17 +726,25 @@ class MESH_OT_surface_slide_proportional(bpy.types.Operator):
         if event.ctrl or event.oskey or event.is_repeat:
             return {'RUNNING_MODAL'}
 
-        if t in {'G', 'S', 'A'}:
-            self._enter_mode({'G': 'MOVE', 'S': 'SCALE', 'A': 'OPEN'}[t])
+        if t == 'R' and self.mode == 'ROTATE':
+            # もう一度 R：軸を 面の向き ⇄ 画面の奥向き（X/Y/Z を決めているときは何もしない）。角度は保つ
+            if self.axis == 'NONE':
+                self.rot_view = not self.rot_view
+                self._rot_reset_mouse()
+                self._update(context)
+        elif t in {'G', 'S', 'A', 'R'}:
+            self._enter_mode({'G': 'MOVE', 'S': 'SCALE', 'A': 'OPEN', 'R': 'ROTATE'}[t])
             self._update(context)
         elif t in {'X', 'Y', 'Z'}:
-            plane = event.shift
+            plane = event.shift and self.mode != 'ROTATE'
             if self.axis != t or self.axis_plane != plane:
                 self.axis, self.axis_plane, self.axis_space = t, plane, 'GLOBAL'
             elif self.axis_space == 'GLOBAL':
                 self.axis_space = 'LOCAL'
             else:
                 self.axis, self.axis_plane = 'NONE', False
+            if self.mode == 'ROTATE':
+                self._rot_reset_mouse()
             self._update(context)
         elif t == 'C':
             self.axis, self.axis_plane = 'NONE', False
@@ -955,8 +1047,8 @@ def _draw_pixel():
         pts = [(c2.x + r * math.cos(a * math.tau / 96), c2.y + r * math.sin(a * math.tau / 96), 0.0) for a in range(97)]
         batch_for_shader(sh, 'LINE_STRIP', {"pos": pts}).draw(sh)
         # 拡大縮小：中心からマウスまでの点線
-        if op.mode == 'SCALE' and not op.num_text:
-            cc = op._center_2d()
+        if op.mode in {'SCALE', 'ROTATE'} and not op.num_text:
+            cc = op._center_2d() if op.mode == 'SCALE' else op._rot_center_2d()
             vv = op.virtual
             seg = []
             n = max(2, int((vv - cc).length / (6 * ui)))

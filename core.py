@@ -12,7 +12,7 @@
 import heapq
 import math
 
-from mathutils import Vector
+from mathutils import Quaternion, Vector
 from mathutils.bvhtree import BVHTree
 from mathutils.kdtree import KDTree
 
@@ -36,6 +36,8 @@ FRONT_DOT_MAX = 0.25
 # 口を開く：上唇／下唇の判定のしきい値
 OPEN_SIDE_THRESHOLD = 0.25
 MAX_STEPS = 64
+# 回転を弧に沿わせるための 1 歩の角度の上限（ラジアン）
+ROT_STEP_MAX = math.radians(5.0)
 
 
 def falloff(kind, t):
@@ -207,6 +209,40 @@ class SlideContext:
         for i in ids:
             c += self.start_world[i]
         return c / len(ids)
+
+    def selection_normal_world(self, ids=None, toward=None):
+        """選んだ所の面の向き（ワールド）。toward（画面の手前向き）と同じ側にそろえる。"""
+        ids = self.selected if ids is None else ids
+        n = Vector((0.0, 0.0, 0.0))
+        for i in ids:
+            for fi in self.link_faces[i]:
+                if not self.face_hidden[fi]:
+                    n += self.face_normal[fi]
+        nt = self.mat3_inv.transposed()
+        w = nt @ n
+        if w.length < 1e-12:
+            w = Vector(toward) if toward is not None else Vector((0.0, 0.0, 1.0))
+        w.normalize()
+        if toward is not None and w.dot(Vector(toward)) < 0.0:
+            w = -w
+        return w
+
+    def rotation_center(self, mirror=False):
+        """回転の中心（ワールド）。左右対称なら元の側の選択だけで決める（両側を選んでも片側ずつ回るように）。"""
+        ids = self.rotation_ids(mirror)
+        return self._centroid_world(ids)
+
+    def rotation_ids(self, mirror=False):
+        if not mirror or not self.selected:
+            return list(self.selected)
+        sign = self._source_sign()
+        ids = [i for i in self.selected if self.side(i) in (sign, 0)]
+        return ids or list(self.selected)
+
+    def _source_sign(self):
+        xs = [(self.basis or self.start)[i].x for i in self.selected]
+        mean = sum(xs) / len(xs) if xs else 0.0
+        return -1 if mean < -self.mirror_tol else 1
 
     def selection_extent_world(self):
         if not self.selected:
@@ -453,6 +489,21 @@ class SlideContext:
             return loc, nrm
         return best[0], best[1]
 
+    def _start_normal(self, i, disp_local):
+        """歩き始めの向き：進む方向にある、吸着してよい面の法線。"""
+        base = self.ref[i]
+        d = disp_local.normalized() if disp_local.length > 0 else Vector((0.0, 0.0, 0.0))
+        normal = None
+        best = -2.0
+        for fi in self.link_faces[i]:
+            if not self.allowed_face[fi]:
+                continue
+            v = self.face_center[fi] - base
+            score = v.normalized().dot(d) if v.length > 0 else -1.0
+            if score > best:
+                best, normal = score, self.face_normal[fi]
+        return normal if normal is not None else Vector((0.0, 0.0, 1.0))
+
     def slide(self, i, disp_local):
         """disp_local だけ、参照面の上を少しずつ歩かせて動かす。いまの形に足した位置を返す。"""
         length = disp_local.length
@@ -464,25 +515,46 @@ class SlideContext:
         pos = base.copy()
         steps = min(MAX_STEPS, max(1, math.ceil(length / self.step_len)))
         step = disp_local / steps
-        # 歩き始めの向き：進む方向にある、吸着してよい面の法線
-        d = disp_local.normalized()
-        normal = None
-        best = -2.0
-        for fi in self.link_faces[i]:
-            if not self.allowed_face[fi]:
-                continue
-            v = self.face_center[fi] - base
-            score = v.normalized().dot(d) if v.length > 0 else -1.0
-            if score > best:
-                best, normal = score, self.face_normal[fi]
-        if normal is None:
-            normal = Vector((0.0, 0.0, 1.0))
+        normal = self._start_normal(i, disp_local)
         for _ in range(steps):
             pos, normal = self._nearest_on_surface(pos + step, normal)
         return self.start[i] + (pos - base)
 
+    def slide_rotate(self, i, center_world, axis_world, angle, snap=True):
+        """center_world を通る axis_world のまわりに angle だけ回す。面に沿わせるときは角度を刻んで弧の上を歩く。"""
+        if angle == 0.0:
+            return self.start[i].copy()
+        axis = Vector(axis_world).normalized()
+        mw = self.matrix_world
+        mw_inv = mw.inverted_safe()
+        c = Vector(center_world)
+        rot = Quaternion(axis, angle).to_matrix()
+        if not snap or self.tree is None or not self.has_allowed[i]:
+            pw = self.start_world[i]
+            return self.start[i] + self.mat3_inv @ (rot @ (pw - c) + c - pw)
+        base = self.ref[i]
+        # 参照面がいまの形と違う（ベースの形）ときは、中心も同じだけずらす
+        if self.use_basis:
+            ids = self.selected
+            shift = Vector((0.0, 0.0, 0.0))
+            for k in ids:
+                shift += self.basis[k] - self.start[k]
+            c = c + self.mat3 @ (shift / max(1, len(ids)))
+        pw0 = mw @ base
+        total = self.mat3_inv @ (rot @ (pw0 - c) + c - pw0)
+        steps = max(math.ceil(abs(angle) / ROT_STEP_MAX), math.ceil(total.length / self.step_len))
+        steps = min(MAX_STEPS, max(1, steps))
+        rstep = Quaternion(axis, angle / steps).to_matrix()
+        normal = self._start_normal(i, total)
+        pos = base.copy()
+        for _ in range(steps):
+            pw = mw @ pos
+            target = mw_inv @ (rstep @ (pw - c) + c)
+            pos, normal = self._nearest_on_surface(target, normal)
+        return self.start[i] + (pos - base)
+
     def solve(self, mode='MOVE', offset=(0.0, 0.0, 0.0), scale=1.0, axis_vec=None, plane=False,
-              snap=True, mirror=False, upper_ratio=0.25, center=None):
+              snap=True, mirror=False, upper_ratio=0.25, center=None, angle=0.0, rot_axis=None):
         """{頂点: 新しいローカル座標} を返す。"""
         center = Vector(center) if center is not None else self.center_world
         if mode != 'SCALE':
@@ -491,13 +563,12 @@ class SlideContext:
         moved = {}  # 頂点 → 実際に動いた量（ローカル）。口の中が唇についていくのに使う
 
         m = self.build_mirror() if mirror else None
-        src_sign = 1
-        if mirror:
-            xs = [(self.basis or self.start)[i].x for i in self.selected]
-            mean = sum(xs) / len(xs) if xs else 0.0
-            src_sign = -1 if mean < -self.mirror_tol else 1
+        src_sign = self._source_sign() if mirror else 1
 
         def solve_one(i, w):
+            if mode == 'ROTATE':
+                # 重みは角度にかける（回った位置との直線で混ぜると、中心側へ縮むため）
+                return self.slide_rotate(i, center, rot_axis, angle * w, snap)
             dw = self.displacement_world(i, mode, offset, scale, axis_vec, plane, upper_ratio, center) * w
             dl = self.mat3_inv @ dw
             if snap:

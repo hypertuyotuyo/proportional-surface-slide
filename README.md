@@ -2,9 +2,9 @@
 
 Blender 5.x のアドオン（extension）です。編集モードで選んだ頂点を、**顔の面から浮かせず・めり込ませずにすべらせ**、
 まわりの頂点も**プロポーショナル編集と同じ減衰でいっしょにすべらせます**。
-口を開ける・口角を上げる・目を細めるといった、表情シェイプキーを作るための道具です。
+口を開ける・口角を上げる・眉を傾けるといった、表情シェイプキーを作るための道具です。
 
-*Blender 5.x extension: slide selected vertices along the mesh surface while neighbours follow with proportional falloff — like Vertex Slide + Proportional Editing combined. Made for facial shape keys (open mouth, raise mouth corners, narrow eyes). Includes a dedicated "open mouth" mode and X-mirror. UI and manual are in Japanese.*
+*Blender 5.x extension: slide selected vertices along the mesh surface while neighbours follow with proportional falloff — like Vertex Slide + Proportional Editing combined. Made for facial shape keys (open mouth, raise mouth corners, tilt eyebrows). Move / scale / rotate along the surface, a dedicated "open mouth" mode, and X-mirror. UI and manual are in Japanese.*
 
 ![練習用の板で口を開いたところ。下唇が下がり、上唇は少し上がり、口角は止まっている](docs/img/open.png)
 
@@ -28,6 +28,7 @@ Blender 5.x のアドオン（extension）です。編集モードで選んだ�
 ## できること
 
 - **移動（G）・拡大縮小（S）**：ふつうの G・S と同じ感覚で、面に沿って動かす・広げる
+- **回転（R）**：選んだ所の真ん中を中心に、面に沿って回す。軸ははじめ「面の向き」なので、斜めから見ていても顔の上でその場で回る（もう一度 R で画面の奥向き、X/Y/Z で軸も決められる）。大きく回しても中心へ縮まない。**左右対称と組み合わせると反対側は逆向きに回る**ので、困り眉・怒り眉・つり目・たれ目が一度で作れる
 - **口を開く（A）**：唇の切れ目のまわりを選んで A を押すと、上唇・下唇・口角に自動で分けて、下唇はマウスについて下へ、上唇は少しだけ上へ、口角は止めたまま、まるく口を開けます。閉じた口から「あ」を作るためのモード
 - **左右対称（M）**：反対側も鏡に写したように動く（メッシュの X ミラーの設定で始まる）
 - **つながった面だけ（Alt+O）**：メッシュをたどった距離で範囲を決めるので、上唇を動かしても、すぐ下の下唇はついてこない
@@ -50,11 +51,11 @@ Blender 5.x のアドオン（extension）です。編集モードで選んだ�
 | キー | すること |
 |---|---|
 | ホイール下 / 上 | 範囲を広く / 狭く |
-| G / S / **A** | 移動 / 拡大縮小 / **口を開く** |
-| X・Y・Z（Shift で平面） | 軸で絞る（押すたびに グローバル → ローカル → 解除） |
+| G / S / R / **A** | 移動 / 拡大縮小 / 回転（もう一度 R で軸を 面の向き ⇄ 画面の奥） / **口を開く** |
+| X・Y・Z（Shift で平面） | 軸で絞る・回転ではその軸のまわり（押すたびに グローバル → ローカル → 解除） |
 | Shift+O / Alt+O | 減衰の曲線 / つながった面だけ |
 | **F / B / M** | **面に沿わせる / 沿わせる面（いまの形・ベース） / 左右対称** |
-| 数字 | 数値入力 |
+| 数字 | 数値入力（回転は度） |
 
 太字がこのアドオンだけのキーで、ほかは Blender の G と同じです。くわしい説明・表情ごとのレシピ・うまくいかないときの表は、
 マニュアル [docs/manual.html](docs/manual.html) にあります（zip に入っていて、N パネルの「使い方を開く」でブラウザに出ます）。
@@ -63,14 +64,13 @@ Blender 5.x のアドオン（extension）です。編集モードで選んだ�
 
 ## できないこと
 
-- 回転（R）はできません。移動・拡大縮小・口を開くの 3 つです
 - 動くのはアクティブなオブジェクトだけです
 - 左右対称は「位置」で相手を探します（Basis で左右がぴったり同じ位置の頂点どうし。トポロジーミラーではありません）
 - シェイプキーの値を途中（0.5 など）にすると、曲がった面の上を大きく動かした頂点は、途中で少し面の内側を通ります（シェイプキーは直線でつなぐため）
 
 ## 入れ方
 
-1. [Releases](https://github.com/hypertuyotuyo/proportional-surface-slide/releases) から `proportional_surface_slide-2.0.0.zip` をダウンロード
+1. [Releases](https://github.com/hypertuyotuyo/proportional-surface-slide/releases) から `proportional_surface_slide-2.1.0.zip` をダウンロード
 2. Blender の画面にドラッグ＆ドロップ（または プリファレンス → Get Extensions → 右上の ∨ → Install from Disk…）
 3. 更新したときは Blender を開き直す
 
@@ -81,9 +81,9 @@ Blender 5.0 以上（5.2 で確かめています）。
 | ファイル | 中身 |
 |---|---|
 | `__init__.py` | オペレーター（モーダル）・N パネル・メニュー・ステータスバーと 3D ビューの描画・キーマップ |
-| `core.py` | 計算だけ（重み・面に沿った移動・口を開く・左右対称）。bpy の UI に触らない |
+| `core.py` | 計算だけ（重み・面に沿った移動と回転・口を開く・左右対称）。bpy の UI に触らない |
 | `ui_text.py` | 画面に出す文言（ヘッダー・ステータスバー・メッセージ・マニュアルのキー表） |
-| `blender_manifest.toml` | extension の情報（id `proportional_surface_slide`・版 2.0.0・Blender 5.0 以上） |
+| `blender_manifest.toml` | extension の情報（id `proportional_surface_slide`・版 2.1.0・Blender 5.0 以上） |
 | `docs/` | マニュアル（`manual.html`・`img/`）と開発メモ（`DEVELOPER.md` は zip に入れない） |
 | `tests/` | テスト（zip に入れない） |
 

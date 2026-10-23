@@ -316,8 +316,79 @@ def s_second():
 
 
 @step()
+def s_rot_start():
+    check(live() is None, "Esc でやめた（回転の前）")
+    cx, cy = S["c"]
+    move(cx + 80, cy)
+    shortcut()
+
+
+@step()
+def s_rot_r():
+    op = live()
+    check(op is not None, "回転のために始めた")
+    tap('R')
+
+
+@step()
+def s_rot_turn():
+    op = live()
+    check(op.mode == 'ROTATE' and op.angle == 0.0, f"R で回転になった（{op.mode}・{op.angle}）")
+    c2 = op._rot_center_2d()
+    S["rc"] = (c2.x + op.region.x, c2.y + op.region.y)
+    rx, ry = S["rc"]
+    import math as _m
+    # R を押した所の角度から、中心のまわりに左回りで 90°
+    a0 = op.rot_last
+    rr = max(60.0, (op.virtual - c2).length)
+    for k in range(1, 10):
+        a = a0 + _m.radians(10 * k)
+        move(rx + rr * _m.cos(a), ry + rr * _m.sin(a))
+
+
+@step()
+def s_rot_check():
+    import math as _m
+    op = live()
+    deg = _m.degrees(op.angle)
+    check(abs(deg - 90) < 3, f"マウスを中心のまわりに左へ 90° 回すと 90°（{deg:.1f}°）")
+    S["deg"] = deg
+    tap('R')
+
+
+@step()
+def s_rot_view():
+    import math as _m
+    op = live()
+    check(op.rot_view is True and abs(_m.degrees(op.angle) - S["deg"]) < 1e-6,
+          f"もう一度 R で軸が画面の奥向きに・角度はそのまま（{op.rot_view}・{_m.degrees(op.angle):.1f}°）")
+    shot("11_rotate.png")
+    for ch, t in [("1", 'ONE'), ("5", 'FIVE')]:
+        tap(t, unicode=ch)
+
+
+@step()
+def s_rot_numeric():
+    import math as _m
+    op = live()
+    check(abs(_m.degrees(op.angle) - 15) < 1e-6, f"数値入力 15 で 15°（{_m.degrees(op.angle):.3f}°）")
+    tap('RET')
+
+
+@step()
+def s_rot_confirm():
+    import math as _m
+    check(live() is None, "回転を Enter で確定")
+    last = bpy.context.window_manager.operators[-1]
+    check(last.properties.mode == 'ROTATE' and abs(_m.degrees(last.properties.angle) - 15) < 1e-6,
+          f"F9 に残るのは 回転・15°（{last.properties.mode}・{_m.degrees(last.properties.angle):.3f}°）")
+    move(*S["c"])
+    tap('ESC')
+
+
+@step()
 def s_menu0():
-    check(live() is None, "Esc で取り消し")
+    check(live() is None, "回転のあとも、ふつうに戻っている")
     area, region = area_region()
     move(*S["c"])
     with bpy.context.temp_override(window=win(), area=area, region=region):
